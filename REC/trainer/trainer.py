@@ -23,7 +23,7 @@ class Trainer(object):
         self.model = model
         self.logger = getLogger()
         
-        self.wandblogger = WandbLogger(config)
+        # self.wandblogger = WandbLogger(config)  # TODO: NOT USING WANDB
      
         self.optim_args = config['optim_args']
         # 为了调参：
@@ -43,7 +43,7 @@ class Trainer(object):
         self.gpu_available = torch.cuda.is_available() and config['use_gpu']
         self.device = config['device']
 
-        self.rank = torch.distributed.get_rank()
+        self.rank = 0  # TODO: NOT USING torch.distributed.get_rank()
         
         if self.rank == 0:          
             self.tensorboard = get_tensorboard(self.logger)
@@ -169,10 +169,10 @@ class Trainer(object):
 
     
     def _valid_epoch(self, valid_data, show_progress=False):
-        torch.distributed.barrier()
+        # TODO: NOT USING torch.distributed.barrier()
         valid_result = self.evaluate(valid_data, load_best_model=False, show_progress=show_progress)
         valid_score = calculate_valid_score(valid_result, self.valid_metric)
-        torch.distributed.barrier()
+        # TODO: NOT USING torch.distributed.barrier()
         return valid_score, valid_result
 
     def _save_checkpoint(self, epoch, verbose=True):
@@ -189,7 +189,8 @@ class Trainer(object):
                 'epoch': epoch,
                 'cur_step': self.cur_step,
                 'best_valid_score': self.best_valid_score,
-                'state_dict': self.model.module.state_dict(),
+                # 'state_dict': self.model.module.state_dict(),  # TODO: NO DDP NO MODULE
+                'state_dict': self.model.module.state_dict() if isinstance(self.model, torch.nn.parallel.DistributedDataParallel) else self.model.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
                 'rng_state': torch.get_rng_state(),   # torch的随机数状态
                 'cuda_rng_state': torch.cuda.get_rng_state()
@@ -197,7 +198,7 @@ class Trainer(object):
             torch.save(state, saved_model_file)
             if verbose:
                 self.logger.info(set_color('Saving current', 'blue') + f': {saved_model_file}')
-        torch.distributed.barrier()
+        # TODO: NOT USING torch.distributed.barrier()
         
         
 
@@ -300,8 +301,9 @@ class Trainer(object):
         valid_step = 0
         for epoch_idx in range(self.start_epoch, self.epochs):
             #train  
-            if self.config['need_training'] == None or self.config['need_training']:              
-                train_data.sampler.set_epoch(epoch_idx)
+            if self.config['need_training'] == None or self.config['need_training']:
+                if isinstance(train_data, torch.utils.data.DataLoader) and hasattr(train_data.sampler, 'set_epoch'):    # TODO: THIS IS ONLY NECESSARY WHEN USING DDP      
+                    train_data.sampler.set_epoch(epoch_idx)
                 training_start_time = time()
                 train_loss = self._train_epoch(train_data, epoch_idx, show_progress=show_progress)
                 self.train_loss_dict[epoch_idx] = sum(train_loss) if isinstance(train_loss, tuple) else train_loss
@@ -312,9 +314,10 @@ class Trainer(object):
                     self.logger.info(train_loss_output)
                 if self.rank == 0:
                     self._add_train_loss_to_tensorboard(epoch_idx, train_loss)
-                self.wandblogger.log_metrics({'epoch': epoch_idx, 'train_loss': train_loss, 'train_step':epoch_idx}, head='train')           
-            # eval
+                # self.wandblogger.log_metrics({'epoch': epoch_idx, 'train_loss': train_loss, 'train_step':epoch_idx}, head='train')  # TODO: NOT USING WANDB
+                print(f"Epoch: {epoch_idx}, Train Loss: {train_loss}, Train Step: {epoch_idx}")
 
+            # eval
             if self.eval_step <= 0 or not valid_data:
                 if saved:
                     self._save_checkpoint(epoch_idx, verbose=verbose)
@@ -341,7 +344,8 @@ class Trainer(object):
                     self.tensorboard.add_scalar('Vaild_score', valid_score, epoch_idx)
                     for name, value in valid_result.items():
                         self.tensorboard.add_scalar(name.replace('@','_'), value, epoch_idx)
-                self.wandblogger.log_metrics({**valid_result, 'valid_step': valid_step}, head='valid')
+                # self.wandblogger.log_metrics({**valid_result, 'valid_step': valid_step}, head='valid')  # TODO: NOT USING WANDB
+                print(f"Validation Step: {valid_step}, Validation Results: {valid_result}")
 
                 if update_flag:
                     if saved:
@@ -365,11 +369,13 @@ class Trainer(object):
         return self.best_valid_score, self.best_valid_result
 
     @torch.no_grad() 
-    def _full_sort_batch_eval(self, batched_data):
+    def _full_sort_batch_eval(self, batched_data, show_progress=False):
         user, history_index, positive_u, positive_i = batched_data
         interaction = self.to_device(user)
                
-        scores = self.model.module.predict(interaction ,self.item_feature)  #[eval_batch]    #[item_num, (feature_dim)] 
+        # scores = self.model.module.predict(interaction ,self.item_feature)  #[eval_batch]    #[item_num, (feature_dim)] 
+        # TODO: NO DDP NO MODULE
+        scores = self.model.module.predict(interaction, self.item_feature) if isinstance(self.model, torch.nn.parallel.DistributedDataParallel) else self.model.predict(interaction, self.item_feature)
         scores = scores.view(-1, self.tot_item_num)
         scores[:, 0] = -np.inf
         # self.logger.info(scores)
@@ -387,6 +393,19 @@ class Trainer(object):
 
         if history_index is not None:
             scores[history_index] = -np.inf
+
+        # Extract and display user histories
+        if show_progress and history_index is not None:
+            # history_index is a 2D tensor where the first row maps to users and the second to their item history
+            user_histories = {}
+            for i, _ in enumerate(user.tolist()):  # Convert user tensor to a list of user indices
+                # Find items in the history for this user
+                items_in_history = history_index[1][history_index[0] == i].tolist()
+
+                user_histories[i] = items_in_history
+                print(f"User {i} History: {items_in_history}")
+
+
         return scores, positive_u, positive_i
     
     @torch.no_grad()   
@@ -399,7 +418,8 @@ class Trainer(object):
             with torch.no_grad():
                 for idx, items in enumerate(item_loader):
                     items = items.to(self.device)
-                    items = self.model.module.compute_item(items)
+                    # items = self.model.module.compute_item(items)  # TODO: NO DDP NO MODULE
+                    items = self.model.module.compute_item(items) if isinstance(self.model, torch.nn.parallel.DistributedDataParallel) else self.model.compute_item(items)
                     self.item_feature.append(items)
                 if isinstance(items, tuple):
                     self.item_feature = torch.cat([x[0] for x in self.item_feature]), torch.cat([x[1] for x in self.item_feature])
@@ -408,14 +428,17 @@ class Trainer(object):
                     self.item_feature = torch.cat(self.item_feature)  #[nitem, 64]
         else :
             with torch.no_grad():
-                self.item_feature = self.model.module.compute_item_all() #[nitem, 64]
+                # self.item_feature = self.model.module.compute_item_all() #[nitem, 64]  # TODO: NOT USING DDP
+                model_to_use = self.model.module if hasattr(self.model, 'module') else self.model
+                self.item_feature = model_to_use.compute_item_all()
 
-    def distributed_concat(self,tensor, num_total_examples):
-        output_tensors = [tensor.clone() for _ in range(torch.distributed.get_world_size())]
-        torch.distributed.all_gather(output_tensors, tensor)
-        concat = torch.cat(output_tensors, dim=0)
-        # truncate the dummy elements added by SequentialDistributedSampler
-        return concat.sum()/ num_total_examples
+    # TODO: NOT USING DISTRIBUTED CONCAT
+    # def distributed_concat(self,tensor, num_total_examples):
+    #     output_tensors = [tensor.clone() for _ in range(torch.distributed.get_world_size())]
+    #     torch.distributed.all_gather(output_tensors, tensor)
+    #     concat = torch.cat(output_tensors, dim=0)
+    #     # truncate the dummy elements added by SequentialDistributedSampler
+    #     return concat.sum()/ num_total_examples
 
    
     @torch.no_grad()    
@@ -425,7 +448,11 @@ class Trainer(object):
         if load_best_model:
             checkpoint_file = model_file or self.saved_model_file
             checkpoint = torch.load(checkpoint_file,map_location=torch.device('cpu'))
-            self.model.module.load_state_dict(checkpoint['state_dict'])
+            # self.model.module.load_state_dict(checkpoint['state_dict'])  # TODO: NO DDP NO MODULE
+            if hasattr(self.model, 'module'):
+                self.model.module.load_state_dict(checkpoint['state_dict'])
+            else:
+                self.model.load_state_dict(checkpoint['state_dict'])
             message_output = 'Loading model structure and parameters from {}'.format(checkpoint_file)
             self.logger.info(message_output)
         
@@ -449,21 +476,35 @@ class Trainer(object):
             # import sys
             # if batch_idx > 5:
             #     sys.exit()
-            scores , positive_u, positive_i = eval_func(batched_data)
+            scores , positive_u, positive_i = eval_func(batched_data, show_progress=show_progress)
+
+            # print("scores:", scores)  # TODO: DEBUG
+            # print("positive u:", positive_u)  # TODO: DEBUG
+            # print("positive i", positive_i)  # TODO: DEBUG
 
             if self.gpu_available and show_progress:
                 iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
-            self.eval_collector.eval_batch_collect(scores, positive_u, positive_i)       
-        num_total_examples = len(eval_data.sampler.dataset)
+            self.eval_collector.eval_batch_collect(scores, positive_u, positive_i, show_progress=show_progress)       
+        # num_total_examples = len(eval_data.sampler.dataset)  # TODO: NO DDP NO SAMPLER DATASET
+        if hasattr(eval_data.sampler, 'dataset'):
+            num_total_examples = len(eval_data.sampler.dataset)
+        else:
+            num_total_examples = len(eval_data.dataset)
         struct = self.eval_collector.get_data_struct()
+
+        print("struct:", struct)  # TODO: DEBUG
+
         result = self.evaluator.evaluate(struct)
 
         metric_decimal_place = 5 if self.config['metric_decimal_place'] == None else self.config['metric_decimal_place']
         for k, v in result.items():
-            result_cpu = self.distributed_concat(torch.tensor([v]).to(self.device),num_total_examples).cpu()
-            #print(k,result_cpu)
-            result[k] = round(result_cpu.item(),metric_decimal_place)
-        self.wandblogger.log_eval_metrics(result, head='eval')
+            # result_cpu = self.distributed_concat(torch.tensor([v]).to(self.device),num_total_examples).cpu()
+            # #print(k,result_cpu)
+            # result[k] = round(result_cpu.item(),metric_decimal_place)
+            # TODO: NOT USING DISTRIBUTED CONCAT
+            result[k] = round(v / num_total_examples, metric_decimal_place)
+        # self.wandblogger.log_eval_metrics(result, head='eval')  # TODO: NOT USING WANDB
+        print(f"Evaluation Results: {result}")
 
         return result
 

@@ -10,7 +10,7 @@ if __name__ == '__main__':
 
 
 
-    device = '3'  
+    device = '0'  
 
     import random
     master_port = random.randint(1002,9999)

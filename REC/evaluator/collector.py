@@ -113,7 +113,8 @@ class Collector(object):
         return avg_rank
 
     def eval_batch_collect(
-        self, scores_tensor: torch.Tensor, positive_u: torch.Tensor, positive_i: torch.Tensor,interaction = None
+        self, scores_tensor: torch.Tensor, positive_u: torch.Tensor, positive_i: torch.Tensor,interaction = None,
+        show_progress=False
     ):
         """ Collect the evaluation resource from batched eval data and batched model output.
             Args:
@@ -137,6 +138,29 @@ class Collector(object):
             pos_idx = torch.gather(pos_matrix, dim=1, index=topk_idx)
             result = torch.cat((pos_idx, pos_len_list), dim=1)
             self.data_struct.update_tensor('rec.topk', result)
+
+            # ADDED: Show progress: display output when there is a match in top k predictions
+            if(show_progress):
+                n_users = scores_tensor.size(0)
+                for user_id in range(n_users):
+                    # Ground truth items for this user
+                    ground_truth = torch.where(pos_matrix[user_id] == 1)[0].tolist()  # Indices of ground-truth items
+
+                    # Top-k predicted items for this user
+                    predictions = topk_idx[user_id].tolist()  # Indices of top-k predicted items
+
+                    # Corresponding ground truth matches for predictions
+                    matches = pos_idx[user_id].tolist()  # Binary match values for predictions
+                
+                    # Extract historical items from scores tensor (those with -inf)
+                    history_items = torch.where(scores_tensor[user_id] == -np.inf)[0].tolist()  # Indices of historical items
+
+                    if any(matches):
+                        print(f"User {user_id}:")
+                        print(f"  Ground Truth: {ground_truth}")
+                        print(f"  Predictions: {predictions}")
+                        print(f"  Matches:     {matches}")
+                        print(f"  History:     {history_items}")
 
         if self.register.need('rec.meanrank'):
 

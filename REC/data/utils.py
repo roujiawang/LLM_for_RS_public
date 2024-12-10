@@ -32,27 +32,26 @@ def load_data(config):
     return dataload
 
 
-def bulid_dataloader(config,dataload, use_DDP=True):
+def bulid_dataloader(config, dataload, use_DDP=False):
     '''
-    split dataset, generate user history sequence, train/valid/test dataset
+    Split dataset, generate user history sequence, and train/valid/test datasets.
     '''
     dataset_dict = {
-
         'DSSM': ('PairTrainDataset', 'PairEvalDataset', 'pair_eval_collate'),        
         'VBPR': ('PairTrainDataset', 'PairEvalDataset', 'pair_eval_collate'),    
-      'LightGCN': ('PairTrainDataset', 'PairEvalDataset', 'pair_eval_collate'),  
+        'LightGCN': ('PairTrainDataset', 'PairEvalDataset', 'pair_eval_collate'),  
         'VidYTDNN': ('vidSampleTwoTowerTrainDataset', 'SeqEvalDataset', 'seq_eval_collate'),
         'NFM': ('SampleOneTowerTrainDataset', 'SeqEvalDataset', 'seq_eval_collate'),
         'DeepFM': ('SampleOneTowerTrainDataset', 'SeqEvalDataset', 'seq_eval_collate'),
     }
- 
 
     model_name = config['model']
     dataload.build()
-       
+
     dataset_module = importlib.import_module('REC.data.dataset')
     train_set_name, test_set_name, collate_fn_name = dataset_dict[model_name]
-     
+
+    # Get dataset classes and collate functions
     if isinstance(train_set_name, tuple):
         train_set_class = getattr(dataset_module, train_set_name[0])
         train_collate_fn = getattr(dataset_module, train_set_name[1]) 
@@ -62,13 +61,12 @@ def bulid_dataloader(config,dataload, use_DDP=True):
     
     test_set_class = getattr(dataset_module, test_set_name)
     eval_collate_fn = getattr(dataset_module, collate_fn_name)
- 
 
-    train_data = train_set_class(config,dataload)
+    # Create datasets
+    train_data = train_set_class(config, dataload)
     valid_data = test_set_class(config, dataload, phase='valid')
     test_data = test_set_class(config, dataload, phase='test')
-    
-        
+
     logger = getLogger()
     logger.info(
         set_color('[Training]: ', 'pink') + set_color('train_batch_size', 'cyan') + ' = ' +
@@ -79,45 +77,48 @@ def bulid_dataloader(config,dataload, use_DDP=True):
         set_color(f'[{config["eval_batch_size"]}]', 'yellow') 
     )
 
+    # Handle samplers based on DDP usage
     if use_DDP:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_data)
         valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_data)
         test_sampler = torch.utils.data.distributed.DistributedSampler(test_data)
     else:
-        train_sampler = None
-        valid_sampler = None
-        test_sampler = None
-    # valid_sampler = SequentialDistributedSampler(valid_data,config['eval_batch_size'])
-    # test_sampler = SequentialDistributedSampler(test_data,config['eval_batch_size'])  
-   
-    num_workers = 10
-    
-    if use_DDP:
-        rank = torch.distributed.get_rank() 
-    else:
-        rank = 0
-    
-    seed = torch.initial_seed()
-    
-    init_fn = partial( 
-    worker_init_fn, num_workers=num_workers, rank=rank, 
-    seed=seed)
-    
-    
-    if train_collate_fn:
-        train_loader = DataLoader(train_data, batch_size=config['train_batch_size'], num_workers=num_workers,
-                          pin_memory=True, sampler=train_sampler, collate_fn = train_collate_fn , worker_init_fn=init_fn)
-    else:
-        train_loader = DataLoader(train_data, batch_size=config['train_batch_size'], num_workers=num_workers,
-                          pin_memory=True, sampler=train_sampler, worker_init_fn=init_fn)
-    valid_loader = DataLoader(valid_data, batch_size=config['eval_batch_size'], num_workers=num_workers,
-                          pin_memory=True, sampler=valid_sampler, collate_fn=eval_collate_fn)
+        train_sampler = torch.utils.data.RandomSampler(train_data)
+        valid_sampler = torch.utils.data.SequentialSampler(valid_data)
+        test_sampler = torch.utils.data.SequentialSampler(test_data)
 
-    test_loader = DataLoader(test_data, batch_size=config['eval_batch_size'], num_workers=num_workers,
-                          pin_memory=True, sampler=test_sampler,collate_fn=eval_collate_fn)
+    # Worker initialization for reproducibility
+    num_workers = 2
+    rank = 0  # No ranks in non-DDP mode
+    seed = torch.initial_seed()
+
+    init_fn = partial(
+        worker_init_fn, num_workers=num_workers, rank=rank, seed=seed
+    )
+
+    # Create DataLoaders
+    if train_collate_fn:
+        train_loader = DataLoader(
+            train_data, batch_size=config['train_batch_size'], num_workers=num_workers,
+            pin_memory=True, sampler=train_sampler, collate_fn=train_collate_fn, worker_init_fn=init_fn
+        )
+    else:
+        train_loader = DataLoader(
+            train_data, batch_size=config['train_batch_size'], num_workers=num_workers,
+            pin_memory=True, sampler=train_sampler, worker_init_fn=init_fn
+        )
+
+    valid_loader = DataLoader(
+        valid_data, batch_size=config['eval_batch_size'], num_workers=num_workers,
+        pin_memory=True, sampler=valid_sampler, collate_fn=eval_collate_fn
+    )
+
+    test_loader = DataLoader(
+        test_data, batch_size=config['eval_batch_size'], num_workers=num_workers,
+        pin_memory=True, sampler=test_sampler, collate_fn=eval_collate_fn
+    )
 
     return train_loader, valid_loader, test_loader
-
 
 
 def worker_init_fn(worker_id, num_workers, rank, seed): 

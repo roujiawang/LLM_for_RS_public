@@ -40,6 +40,8 @@ class Data:
         self.inter_feat = df
 
     def _data_processing(self):
+
+        print("_data_processing called")  # TODO: DEBUG
         
         self.id2token = {}
         self.token2id = {}
@@ -62,6 +64,50 @@ class Data:
         self.train_feat = None
         self.feat_name_list = ['inter_feat']       #self.inter_feat
 
+    # Internal function to look up original item IDs from new (tokenized) IDs
+    def lookup_original_ids(self, new_ids):
+        """
+        Given one or more new item IDs (tokens), return the corresponding original item IDs.
+        
+        Parameters:
+            new_ids (int or list): New item IDs (tokens) to be looked up.
+            
+        Returns:
+            list: Original item IDs corresponding to the new IDs.
+        """
+        # If the input is a single ID, convert it into a list for uniformity
+        if isinstance(new_ids, int):
+            new_ids = [new_ids]
+        
+        original_ids = []
+        
+        # Look up the original item IDs
+        # NOTE: id2token is a NUMPY ARRAY
+        for new_id in new_ids:
+            if 0 <= new_id < len(self.id2token['item_id']):
+                original_ids.append(self.id2token['item_id'][new_id])  # Get original item ID using new ID
+            else:
+                original_ids.append(None)  # Handle missing IDs, can be customized
+        
+        return original_ids
+
+    
+    def examine_dicts(self):
+        """
+        This function prints the contents of `id2token` and `token2id` for both
+        'user_id' and 'item_id'. Useful for debugging or inspecting the data mappings.
+        """
+        print("Examining id2token and token2id dictionaries:")
+
+        # Iterate over user_id and item_id
+        for feature in ['user_id', 'item_id']:
+            print(f"\nFeature: {feature}")
+
+            # id2token: token index -> original id
+            print(f"id2token[{feature}]: {self.id2token[feature]}")
+
+            # token2id: original id -> token index
+            print(f"token2id[{feature}]: {self.token2id[feature]}")
    
     def build(self):
         

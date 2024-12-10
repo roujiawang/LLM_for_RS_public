@@ -23,7 +23,7 @@ metric_decimal_place: 7
 
 
 # Training and evaluation config
-epochs: 120
+epochs: 10
 
 train_batch_size: 64 #2500     4卡：16,单卡：64
 eval_batch_size: 20

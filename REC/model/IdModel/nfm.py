@@ -23,6 +23,9 @@ class NFM(BaseModel):
         self.max_seq_length = config['MAX_ITEM_LIST_LENGTH']
 
         self.item_num = dataload.item_num
+
+        print("NFM - num items:", self.item_num)  # TODO: DEBUG
+
         #self.user_embedding = nn.Embedding(self.item_num, self.embedding_size, padding_idx=0)
         self.item_embedding = nn.Embedding(self.item_num, self.embedding_size, padding_idx=0)
         

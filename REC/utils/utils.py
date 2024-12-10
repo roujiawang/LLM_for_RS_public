@@ -14,10 +14,8 @@ def get_local_time():
     Returns:
         str: current time
     """
-    torch.distributed.barrier()
     cur = datetime.datetime.now()
     cur = cur.strftime('%b-%d-%Y_%H-%M-%S')
-
     return cur
 
 

@@ -56,13 +56,10 @@ def init_logger(config):
     init(autoreset=True)
     LOGROOT = './log/'
     dir_name = os.path.dirname(LOGROOT)
-    rank = torch.distributed.get_rank()
     
-    if rank == 0:
-        ensure_dir(dir_name)
-        model_name = os.path.join(dir_name, config['model'])
-        ensure_dir(model_name)
-    torch.distributed.barrier()
+    ensure_dir(dir_name)
+    model_name = os.path.join(dir_name, config['model'])
+    ensure_dir(model_name)
     logfilename = '{}/{}.log'.format(config['model'], get_local_time())
 
     logfilepath = os.path.join(LOGROOT, logfilename)
@@ -99,4 +96,4 @@ def init_logger(config):
     sh.setLevel(level)
     sh.setFormatter(sformatter)
 
-    logging.basicConfig(level=level if rank in [-1, 0] else logging.WARN, handlers=[sh, fh])
+    logging.basicConfig(level=level, handlers=[sh, fh])
